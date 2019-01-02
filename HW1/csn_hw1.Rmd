@@ -1,0 +1,114 @@
+---
+title: 'Notebook for Introduction to igraph: Lab 1'
+date: "02/10/2018"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+author: 
+  - Carolina (Ferreira Gomes) Centeio Jorge
+  - Pietro Fronte
+---
+
+
+```{r echo = T, warning = F, include = F}
+library(igraph)
+library(emdbook)
+library(parallel)
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+```
+## First task: plot the clustering coefficient and the average shortest-path as a function of the parameter p of the WS model.
+To build WS (Watts Strogatz) graphs we use watts.strogatz.game(dimension, size, neighbours, p), with 1 dimension, 1000 nodes and 4 neighbours. We build norm_graph with probability 0 so we can normalize the values of clustering coefficients (transitivity) and average path length.
+```{r}
+step = 15
+nodes = 1000
+neigh = 4
+n_sim = 10
+
+norm_graph = watts.strogatz.game(dim = 1, size = nodes, nei = neigh, 0)
+nrm_trans = transitivity(norm_graph)
+nrm_apl = average.path.length(norm_graph)
+```
+Then, we have a list of 15 different probabilities in a logarithmic scale and step, from 0.0001 (close to 0 but not discarded) to 1. We repeat each of them for n_sim (number of simulations we aim  to run).
+```{r}
+probs = lseq(from=0.0001, to=1, length.out = step)
+probs_vect = rep(probs, each= n_sim)
+
+```
+We buil the function we will want to apply to the graphs throughout the simulation. The function cc returns the normalized value of the clustering coefficient and apl of the normalized average step length. To create the graphs from the several probabilities at probs_vect, we need the function create_ws. Thus, we create the graphs (graphs) and check on the normalized clustering coefficients (cluster_coeffs) and average path lengths (apl_coeffs).
+```{r}
+cc = function(g) {
+  transitivity(g)/nrm_trans
+  }
+
+apl = function(g){
+  average.path.length(g)/nrm_apl
+}
+
+create_ws = function(p){
+  watts.strogatz.game(dim = 1, nodes, neigh,p)
+}
+
+graphs = lapply(probs_vect, create_ws)
+
+cluster_coeffs = sapply(graphs, cc)
+apl_coeffs = sapply(graphs, apl)
+```
+Now we have n_sim values for each probability we gave to the graphs. So we need to calculate the average of each value (grouping them).
+```{r}
+cluster_coeffs = .colMeans(cluster_coeffs, n_sim, step)
+apl_coeffs = .colMeans(apl_coeffs, n_sim, step)
+```
+And we plot the values in a logarithmic scale for x axis: in black we can see the clustering coefficients for different probabilities and in red we can see the average path length.
+```{r}
+plot(x = probs, y = cluster_coeffs, type = "o", log="x", main = "CC and APL in WS graph", lwd =2, xlab = "Probability", ylab = "Cluster Coefficent")
+points(x = probs, y = apl_coeffs, col = "red", lty=1, lwd =2)
+lines(x = probs, y = apl_coeffs, col = "red", lwd = 2)
+legend("topright", legend = c("Cluster Coeff","Average Path Length"), col = c("black","red"), lty = c(2,2), lwd = c(2,2))
+box()
+```
+
+#### Conclusion
+Both values (clustering coefficient and average path length) decrease when we increase the probability of reconnecting nodes to random nodes (increase randomness). However, clustering coeffecient takes longer to decrease (staying close to 1) and decreases in a sharpen way when the probability is close to 1 and average path length behaves the other way around: it decreases in a sharpen way for low values of probability and then almost stabilizes (near to zero). Random graphs show low transitivity and so low average path length (since it is more probable to be connected to a "further" node).
+
+
+## Second task: plot the average shortest-path length as a function of the network size of the ER model.
+Using the same variables as the parameters for our simulations (step, nodes and n_sim) but with different values (20, 10000 and 100 respectively). We create a list with the different number of nodes (n_nodes) we want to test in a graph: we use a logarithmic scale because too many nodes take too much time to be computed). We then replicate this values the number of simulations we aim to run (n_nodes_vect).
+```{r}
+step = 10
+nodes = 10000
+n_sim = 100
+
+n_nodes = round(lseq(from = 2, to = nodes, length.out = step),0)
+
+# vector of nodes
+n_nodes_vect = rep(n_nodes, each= n_sim)
+
+```
+Then, we build the function to create the Erdös-Rényi graph (create_er) with a probability depending on the number of nodes of the graph. We used the inequation $ p \ge \frac{(1+\epsilon) \ln{n}}{n}$ and decided to use $p = \frac{(1.3) \ln{n}}{n}$. We create the graphs and the respective average path lengths. Then, as we did before, we group and calculate the average for all the simulations corresponding to each value of number of nodes.
+```{r}
+
+# erdos renyi graph
+create_er= function(n){
+  p = ((1.3*log(n))/n)
+  erdos.renyi.game(n , p.or.m = p)
+}
+ 
+# create the graphs
+er_graphs = lapply(n_nodes_vect, create_er)
+
+# evaluate shortest path length
+sp_coeff = sapply(er_graphs, average.path.length)
+sp_coeff = .colMeans(sp_coeff, n_sim, step, na.rm = TRUE)
+```
+And we plot it!
+```{r}
+plot(x=n_nodes, y = sp_coeff, type = "o", main = "Average Shortest Path in ER random graph", xlab = "N. nodes", ylab = "Average Shortest Path", lwd=2, col="orchid")
+points(x=n_nodes, y = sp_coeff, lty=1, lwd =2, col = "magenta" )
+legend("bottomright", legend="ASP", col = "magenta", lty = 1, lwd =2)
+```
+
+#### Conclusion
+As the number of nodes increase, the average path length also increases in a logarithmic way. Thus, we can check that the diameter is (roughly) $O(\log{n})$.

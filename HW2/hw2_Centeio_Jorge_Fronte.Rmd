@@ -1,0 +1,323 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r include=FALSE}
+require(stats4)
+require(VGAM)
+options(warn = -1)
+```
+
+
+```{r Functions}
+#FUNCTIONS
+# get the -2LogLikelihood of a function
+get_2LL = function(x){
+  attributes(summary(x))$m2logL
+}
+# get the MLE of a parameter
+get_estimate = function(x,i){
+  attributes(summary(x))$coef[i]
+}
+# C constant of displaced Poisson
+logf <- function(i){
+  sum(log(seq(1, i)))
+}
+# MINUS LOG-LIKELIHOOD OF CANDIDATE DISTRIBUTIONS
+# minus log-likelihood of the displaced poisson function
+minus_log_likelihood_poiss = function(lambda){
+  -(M*log(lambda)
+  -N*(lambda+log(1-exp(-lambda)))
+  -C)
+}
+# minus log-likelihood of displaced geometric distribution
+minus_log_likelihood_geom <- function(q){
+  -N*log(q)-(M-N)*log(1-q)
+}
+# minus log-likelihood of zeta distribution with fixed exponent (2)
+minus_log_likelihood_zeta2 = function() {
+  2*sum(log(x))
+  +length(x)*log(pi^2/6)
+}
+# minus log-likelihood of zeta function
+minus_log_likelihood_zeta <- function(gamma) {
+  length(x) * log(zeta(gamma)) + gamma * sum(log(x))
+}
+# hmax function - harmonic number function
+hmax = function(kmax, gamma){
+  k_list = seq(1,kmax)
+  out = sum(k_list^(-gamma))
+  return(out)
+}
+# minus log-likelihood of zeta right truncated function
+minus_log_likelihood_rt_zeta <- function(gamma, kmax) {
+  gamma*sum(log(x)) + length(x)*hmax(kmax, gamma)
+}
+# AIC EVALUATION
+# function to compute the Akaike Information Criterion
+get_AIC <- function(m2logL,K,N) {
+  a = m2logL + 2*K*N/(N-K-1)# AIC with a correction for sample size
+  return(a)
+}
+# ALTMANN Log-Likelihood FUNCTION
+altmann_ll = function(gamma_alt, delta){
+  csum = 0
+  for(i in 1:length(x)){
+    csum = csum + (i^(-gamma_alt))*(exp(-delta*i))
+  }
+  c = 1/csum
+  
+  
+  result = 0
+  for(i in 1:length(x)){
+    result = result - (log(c) + (-gamma_alt)*log(x[i]) + (-delta*x[i]))
+  }
+  
+  return(result)
+}
+# DISPLACED GEOMETRIC DISTRIBUTION
+displaced_geo = function(q){q*(1-q)^(x-1)}
+# DISPLACED POISSON DISTRIBUTION
+displaced_poiss = function(lambda) { (lambda^(x)*exp(-lambda) ) / (try(factorial(x)*(1-exp(-lambda)), silent = T)) }
+# ZETA DISTRIBUTION
+zeta_distribution = function(gamma){ (x^(-gamma)) / (zeta(gamma))}
+# RIGHT TRUNCATED DISTRIBUTION
+rt_zeta = function(gamma,kmax) {(x^(-gamma))/(hmax(kmax, gamma))}
+# ALTMANN DISTRIBUTION 
+altmann_distribution = function(gamma_alt, delta) {  
+  csum = 0
+  for(i in 1:length(x)){
+    csum = csum + (i^(-gamma_alt))*(exp(-delta*i))
+  }
+  c = 1/csum
+  
+  result = c*x^(-gamma_alt)*exp(-delta*x)
+  return(result)
+  }
+```
+
+### INTRODUCTION
+In this project, we are asked to analyse the degree distribution of global syntatic dependency networks (one network for each language). In other words, the vertices of these networks are words (_word types_) and two vertices (two words) are linked if they have been linked at least once in a dependency treebank.
+
+In more detail, the degree distributions of each language can follow an unknown distribution that we want try to find. What we want to do then is then called model selection: we start with a bunch of proposal distributions choosen a priori (possibly parametric distribution in order to use the tuning of the parameter to find the best fit for our data), evaluate their best parameter(s) according to the data with Maximum Likelihood Estimation and then we compare the proposal models with the Akaike Informatio Criterion and see which one fits our data best.
+
+The model suggested in this task are:
+
+\[
+\text{Geometric distribution:} \quad p(k)=(1-q)^{k-1}q \quad\text{allowing p(0)=0}
+\]
+\[
+\text{Poisson distribution:} \quad p(k)=\frac{\lambda^k e^{-\lambda}}{k!(1-e^{-\lambda})} \quad \text{Zero-truncated version ( k=0 not allowed)}
+\]
+
+\[
+\text{Zeta distribution:} \quad p(k)=\frac{k^{-\gamma}}{\zeta(\gamma)}
+\]
+
+\[
+\text{Right truncated distribution:} \quad p(k)=\frac{k^{-\gamma}}{H(kmax, \gamma)}
+\]
+
+Since we are not allowing unconnected nodes (e.g unconnected words) some changes on the original implementation of Poisson distribution and Geometric were needed
+
+
+
+```{r}
+languages = list.files(path = "./data/", pattern = "*.txt", full.names = TRUE)
+```
+
+
+```{r}
+# number of parameters for each distribution(poisson, geometric, zeta, rt zeta)
+K = c(1,1,1,2,2)
+params_vector = matrix(data = NA, nrow = length(languages), ncol = length(K)+2)
+AIC_vect      = matrix(data = NA, nrow = length(languages), ncol = length(K))
+AIC_delta     = matrix(data = NA, nrow = length(languages), ncol = length(K)-1)
+new_AIC_delta = matrix(data = NA, nrow = length(languages), ncol = length(K))
+colnames(params_vector) = c("lambda", "q", "gamma_zeta", "gamma rt zeta", "kmax", "gamma", "delta")
+colnames(AIC_vect)      = c("POISSON", "GEO", "ZETA", "RT ZETA", "ALTMANN")
+colnames(AIC_delta)     = c("POISSON", "GEO", "ZETA", "RT ZETA")
+colnames(new_AIC_delta)     = c("POISSON", "GEO", "ZETA", "RT ZETA", "ALTMANN")
+rownames(params_vector) = c("Arabic", "Basque", "Catalan", "Chinese", "Czech", 
+                            "English", "Greek", "Hungarian", "Italian", "Turkish")
+rownames(AIC_vect) = c("Arabic", "Basque", "Catalan", "Chinese", "Czech", 
+                       "English", "Greek", "Hungarian", "Italian", "Turkish")
+rownames(AIC_delta) = c("Arabic", "Basque", "Catalan", "Chinese", "Czech", 
+                        "English", "Greek", "Hungarian", "Italian", "Turkish")
+rownames(new_AIC_delta) = c("Arabic", "Basque", "Catalan", "Chinese", "Czech", 
+                        "English", "Greek", "Hungarian", "Italian", "Turkish")
+```
+
+
+### RESULTS
+
+The code below reads each undirected network corresponding to one of each language and evaluates the MLE for the parameter(s) of each candidate distribution. After that, it evaluates the AIC criterion of the model and compares them, finding the best AIC. The model selection is carried out both with and without including the Altmann function. In this way, we can check how good this last model is to the degree distribution of words. Visual fitting is generated for each language and each model used. 
+
+```{r warning=FALSE}
+for(i in 1:length(languages)){
+  degree_sequence = read.delim(languages[i], header = FALSE)
+  x = degree_sequence$V1
+  
+  # hyperparameters of interest
+  M = sum(x)
+  M_prime = sum(log(x))
+  N = length(x)
+  C = 0
+  for(j in 1:length(x)){
+    C = C+logf(x[j])
+  }
+  lower_k = max(x)
+  
+  #MLE POISSON
+  mle_pois <- mle(minus_log_likelihood_poiss,
+            start = list(lambda = M/N),
+            method = "L-BFGS-B",
+            lower = c(1.0000001))
+  
+  # MLE GEOM
+  mle_geom <- mle(minus_log_likelihood_geom,
+                  start = list(q=N/M),
+                  method = "L-BFGS-B",
+                  lower = c(0.0000001),
+                  upper = c(0.9999999))
+  
+  # MLE ZETA
+  mle_zeta <- mle(minus_log_likelihood_zeta,
+                  start = list(gamma = 2),
+                  method = "L-BFGS-B",
+                  lower = c(1.0000001))
+  
+  # MLE RT ZETA
+  gamma_opt = mle(minus_log_likelihood_rt_zeta,
+                  start = list(gamma = 1.00001),
+                  fixed = list(kmax = lower_k),
+                  method = "L-BFGS-B",
+                  lower = c(1.00001))
+  
+  mle_zeta_rt = mle(minus_log_likelihood_rt_zeta,
+                    start = list(kmax = lower_k),
+                    fixed = list(gamma = get_estimate(gamma_opt,1)),
+                    method = "L-BFGS-B",
+                    lower = c(lower_k))
+  
+  
+  #MLE ALTMANN
+  mle_altmann = mle(altmann_ll,
+        start = list(gamma_alt=1.001, delta = 0.001),
+        method = "L-BFGS-B",
+        lower = c(1.0000001, 0.0000001))
+  
+  
+  
+  params_vector[i,] = c(get_estimate(mle_pois,1),
+                        get_estimate(mle_geom,1), 
+                        get_estimate(mle_zeta,1), 
+                        get_estimate(gamma_opt,1),
+                        get_estimate(mle_zeta_rt,1),
+                        get_estimate(mle_altmann,1),
+                        get_estimate(mle_altmann,2))
+  
+  # -2logLikelihood of each function
+  ll_pois = get_2LL(mle_pois)
+  ll_geom = get_2LL(mle_geom)
+  ll_zeta = get_2LL(mle_zeta)
+  ll_rtz  = get_2LL(mle_zeta_rt)
+  ll_altmann = get_2LL(mle_altmann)
+  
+  # -2logL
+  L = c(ll_pois, ll_geom, ll_zeta, ll_rtz, ll_altmann)
+  
+  # AIC value for each distribution
+  for (z in 1:length(K)){
+    AIC_vect[i,z] = get_AIC(L[z], K[z], N )
+  }
+  
+  # best AIC value
+  best = min(AIC_vect[i,1:(length(K)-1)])
+  best2 = min(AIC_vect[i,])
+  
+  # evaluating the delta AIC
+  AIC_delta[i,] = AIC_vect[i,1:(length(K)-1)]-best
+  new_AIC_delta[i,] = AIC_vect[i,] - best2
+  
+  # PLOTTING 
+  h = hist(x, breaks = 100000, plot = FALSE)
+  h$counts = h$counts/sum(h$counts)
+  #par(mfrow=c(2,2))
+  
+  # plot geometric fitting
+  
+  
+  layout(matrix(c(1,2,3,3), 2, 2, byrow = TRUE))
+  
+  plot(h, xlim = c(1, unname(quantile(x,.95))), col = "black", 
+       main = paste("Poisson fitting on ", rownames(params_vector)[i]), 
+       ylab = "Probability", xlab = "Degree")
+  points(x = x, y = displaced_poiss(params_vector[i, 1]), col = "red", pch = 16, cex = 2)
+  legend("topright", legend = "Poisson", pch = 16, col = "red")
+  
+  plot(h, xlim = c(1, unname(quantile(x,.95))), col = "black", 
+       main = paste("Geometric fitting on ", rownames(params_vector)[i]),
+       ylab = "Probability", xlab = "Degree")
+  points(x = x, y = displaced_geo(params_vector[i, 2]), col = "blue", pch = 16, cex = 2)
+  legend("topright", legend = "Geometric", pch = 16, col = "blue")
+  
+  plot(h, xlim = c(0, unname(quantile(x,.95))),col = "black", 
+       main = paste("Zeta fitting on ", rownames(params_vector)[i]),
+       ylab = "Probability", xlab = "Degree")
+  points(x = x, y = zeta_distribution(params_vector[i, 3]), col = "green", pch = 16, cex = 2)
+  legend("topright", legend = "Zeta", pch = 16, col = "green")
+  
+  layout(matrix(c(1,1,2,2), 2, 2, byrow = TRUE))
+  plot(h, xlim = c(0, unname(quantile(x,.95))), col = "black", 
+       main = paste("RT Zeta fitting on ", rownames(params_vector)[i]),
+       ylab = "Probability", xlab = "Degree")
+  points(x = x, y = rt_zeta(params_vector[i, 4], params_vector[i, 5]), col = "orchid", pch = 16, cex = 2)
+  legend("topright", legend = "RT Zeta", pch = 16, col = "orchid")
+  
+  
+  plot(h, xlim = c(0, unname(quantile(x,.95))), col = "black", 
+       main = paste("Altmann fitting on ", rownames(params_vector)[i]), 
+       ylab = "Probability", xlab = "Degree")
+  points(x = x, y = altmann_distribution(params_vector[i, 6], params_vector[i, 7]), col = "orange", pch = 16, cex = 2)
+  legend("topright", legend = "Altmann", pch = 16, col = "orange")
+}
+```
+
+```{r}
+params_vector
+```
+
+```{r}
+AIC_vect 
+```
+
+```{r}
+AIC_delta
+```
+
+```{r}
+new_AIC_delta
+```
+
+### DISCUSSION
+
+Looking at the AIC table showed (the one without the Altmann function), it is easy to see how the zeta distribution function is able to approximate better than the other candidates the unknown degree distribution. Geometric distribution is the one that after the zeta to better approximate the underlying distribuion. Right truncated zeta and Poisson (particularly the last one) are far from giving a good approximation. This can be seen also visually. Poisson distribution is always very different from shape of the histogram of the data.
+
+Including, in a second moment, the Altmann function, we see how this distribution is able to outperform its rivals. However, in languages like Greek or Bask the Zeta distribution seems also to work well and be closer to the Altmann.
+
+When plotting, we faced the problem of giving a good data visualization. All the languages present long tails because there exists few words that show a really high degree. To avoid this issue, when plotting, we choose to show up to the 0.95 percentile of the distribution discarding the last 5% of the distribution located in high values of degree.
+
+### METHODS
+
+Notice, however, that the values of the Right truncated distribution can be affected by the not properly implementation of the MLE optimization. Since we were sure that MLE was performing well (since Kmax would not be optimized; instead it would stick to the given valuea), following the suggestion of the Prof. Marta Arias, we splitted the optimization process in two different parts: first, we optimize first the $\gamma$ parameter keeping Kmax fixed to the higher degree value found in the degree distribution; then keeping $\gamma = \gamma_{MLE}$ we optimize the second parameter Kmax. We are aware this is not a proper optimization process but, at least, it allows us to get some values to use in comparison part.
+
+When computing the pmf of the Poisson distribution in each given point we were getting some "out of bound" warnings caused to some high degree present in the Arabic language. A factorial of an high value can causes crashes since 170 is the last value for which R can compute the factorial. 
+
+
+
+
+
